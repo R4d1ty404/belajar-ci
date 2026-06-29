@@ -37,3 +37,9 @@ $routes->post('buy', 'TransaksiController::buy', ['filter' => 'auth']);
 
 $routes->get('ajax/destinations','TransaksiController::destinations', ['filter' => 'auth']);
 $routes->get('ajax/costs','TransaksiController::costs', ['filter' => 'auth']);
+
+$routes->get('history', 'TransaksiController::history', ['filter' => 'auth']);
+
+$routes->resource('api/products', ['controller' => 'Api\ProdukController']);
+
+$routes->get('api/transactions', 'Api\TransaksiController::index');
