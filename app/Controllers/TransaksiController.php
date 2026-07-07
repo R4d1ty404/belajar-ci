@@ -18,10 +18,10 @@ class TransaksiController extends BaseController
 
     public function __construct()
     {
-        helper(['number', 'form']);
+        helper(['number', 'form', 'transaksi']);
         $this->cart = service('cart');
         $this->transactionModel = new TransactionModel();
-        $this->transactionDetailModel = new TransactionDetailModel(); 
+        $this->transactionDetailModel = new TransactionDetailModel();
     }
 
     public function index()
@@ -155,32 +155,46 @@ class TransaksiController extends BaseController
         return $this->response->setJSON($results);
     }
     public function buy()
-    { 
+    {
         $cartItems = $this->cart->contents();
-
         if (empty($cartItems)) {
-            return redirect()->back();
+            return redirect()->back()->with('error', 'Keranjang kosong');
         }
 
         $db = \Config\Database::connect();
-        $db->transStart(); 
+        $db->transStart();
 
-        $subtotal = 0;
+        // Hitung subtotal produk
+        $subtotal_produk = 0;
         foreach ($cartItems as $item) {
-            $subtotal += $item['qty'] * $item['price'];
+            $subtotal_produk += $item['qty'] * $item['price'];
         }
 
         $ongkir = (int) $this->request->getPost('ongkir');
+        $kupon_input = $this->request->getPost('kupon_code');
+
+        // Hitung komponen (pastikan helper diload)
+        $ppn = hitung_ppn($subtotal_produk);
+        $biaya_admin = hitung_biaya_admin($subtotal_produk);
+        $diskon_data = hitung_diskon_kupon($subtotal_produk, $kupon_input);
+        $diskon_kupon = $diskon_data['diskon'];
+        $kupon_terpakai = $diskon_data['kode'];
+
+        $grand_total = $subtotal_produk + $ongkir + $ppn + $biaya_admin - $diskon_kupon;
 
         $transaction = [
-            'username'    => $this->request->getPost('username'),
-            'alamat'      => $this->request->getPost('alamat'),
-            'ongkir'      => $ongkir,
-            'total_harga' => $subtotal + $ongkir,
-            'status'      => 0, 
+            'username'     => $this->request->getPost('username'),
+            'alamat'       => $this->request->getPost('alamat'),
+            'ongkir'       => $ongkir,
+            'total_harga'  => $subtotal_produk,
+            'ppn'          => $ppn,
+            'biaya_admin'  => $biaya_admin,
+            'kupon_code'   => $kupon_terpakai,
+            'diskon_kupon' => $diskon_kupon,
+            'grand_total'  => $grand_total,
+            'status'       => 0,
         ];
-
-        // insert transaction
+        // Insert transaction
         if (!$this->transactionModel->insert($transaction)) {
             $db->transRollback();
             return redirect()->back()->with('error', 'Gagal membuat transaksi');
@@ -188,14 +202,13 @@ class TransaksiController extends BaseController
 
         $transactionId = $this->transactionModel->getInsertID();
 
-        // insert transaction detail
         foreach ($cartItems as $item) {
             $this->transactionDetailModel->insert([
                 'transaction_id' => $transactionId,
                 'product_id'     => $item['id'],
                 'jumlah'         => $item['qty'],
                 'diskon'         => 0,
-                'subtotal_harga' => $item['qty'] * $item['price'] 
+                'subtotal_harga' => $item['qty'] * $item['price']
             ]);
         }
 
@@ -205,9 +218,8 @@ class TransaksiController extends BaseController
             return redirect()->back()->with('error', 'Gagal membuat transaksi');
         }
 
-            //hapus session keranjang belanja 
         $this->cart->destroy();
-        return redirect()->to(base_url());
+        return redirect()->to('/')->with('success', 'Transaksi berhasil! Grand Total: Rp ' . number_format($grand_total, 0, ',', '.'));
     }
     public function history()
     {
@@ -225,5 +237,27 @@ class TransaksiController extends BaseController
         ]; 
 
         return view('v_history', $data);
+    }
+    public function success()
+    {
+        $transactionId = session()->getFlashdata('transaction_id');
+        if (!$transactionId) {
+            return redirect()->to('/');
+        }
+
+        $transaction = $this->transactionModel->find($transactionId);
+        if (!$transaction) {
+            return redirect()->to('/');
+        }
+
+        // Ambil detail produk
+        $details = $this->transactionDetailModel->where('transaction_id', $transactionId)->findAll();
+
+        $data = [
+            'transaction' => $transaction,
+            'details'     => $details,
+        ];
+
+        return view('v_success', $data);
     }
 }
